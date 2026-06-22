@@ -21,8 +21,11 @@ Strategy flow each cycle:
 import json
 import logging
 import os
+import smtplib
 import time
 from datetime import date, datetime
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 
 import numpy as np
 import requests
@@ -38,6 +41,10 @@ ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY")
 ALPACA_BASE_URL   = os.getenv("ALPACA_BASE_URL")        # paper trading: orders/positions/account
 ALPACA_DATA_URL   = "https://data.alpaca.markets/v2"    # market data: bars / quotes
 FINNHUB_API_KEY   = os.getenv("FINNHUB_API_KEY")
+
+EMAIL_SENDER      = os.getenv("EMAIL_SENDER")
+EMAIL_PASSWORD    = os.getenv("EMAIL_PASSWORD")
+EMAIL_RECEIVER    = "matteo.cariola8@gmail.com"
 
 ETFS              = ["SPY", "QQQ", "GLD", "TLT", "UUP"]
 LOOP_INTERVAL     = 300          # seconds between cycles (5 min is enough for daily-bar strategy)
@@ -72,30 +79,68 @@ claude = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
 def get_historical_bars(symbols: list[str], limit: int = BARS_LIMIT) -> dict[str, dict]:
     """Returns {sym: {c, h, l, v arrays}} sorted oldest→newest."""
+    from datetime import timedelta
+    start_date = (datetime.utcnow() - timedelta(days=500)).strftime("%Y-%m-%dT00:00:00Z")
+    raw_bars: dict[str, list] = {s: [] for s in symbols}
+
     params = {
         "symbols":    ",".join(symbols),
         "timeframe":  "1Day",
-        "limit":      limit,
+        "start":      start_date,
+        "limit":      1000,          # per-page cap; we paginate if needed
         "adjustment": "split",
         "feed":       "iex",
     }
+    log.info(f"Fetching bars: symbols={symbols} start={start_date}")
+
     try:
-        r = requests.get(f"{ALPACA_DATA_URL}/stocks/bars",
-                         headers=alpaca_headers, params=params, timeout=20)
-        r.raise_for_status()
+        page = 0
+        while True:
+            r = requests.get(f"{ALPACA_DATA_URL}/stocks/bars",
+                             headers=alpaca_headers, params=params, timeout=20)
+            log.info(f"Bars API status={r.status_code} url={r.url}")
+            if not r.ok:
+                log.error(f"Bars API HTTP {r.status_code}: {r.text[:400]}")
+                break
+            payload = r.json()
+            page += 1
+
+            # Log raw structure on first page so we can diagnose format issues
+            if page == 1:
+                keys = list(payload.keys())
+                sample_sym = next(iter(payload.get("bars", {})), None)
+                sample_len = len(payload["bars"].get(sample_sym, [])) if sample_sym else 0
+                log.info(f"Bars response keys={keys} sample_sym={sample_sym} "
+                         f"sample_bars_count={sample_len}")
+
+            for sym, bars_list in payload.get("bars", {}).items():
+                raw_bars.setdefault(sym, []).extend(bars_list)
+
+            next_token = payload.get("next_page_token")
+            if not next_token:
+                break
+            params["page_token"] = next_token
+            log.info(f"Paginating bars, page={page+1}")
+
         out = {}
-        for sym, bars in r.json().get("bars", {}).items():
-            if bars:
-                out[sym] = {
-                    "c": np.array([b["c"] for b in bars]),
-                    "h": np.array([b["h"] for b in bars]),
-                    "l": np.array([b["l"] for b in bars]),
-                    "v": np.array([b["v"] for b in bars]),
-                    "t": [b["t"] for b in bars],
-                }
+        for sym, bars_list in raw_bars.items():
+            # Keep only the most recent `limit` bars
+            bars_list = bars_list[-limit:]
+            if len(bars_list) < 30:
+                log.warning(f"{sym}: only {len(bars_list)} bars received — signals will be NaN")
+                continue
+            log.info(f"{sym}: {len(bars_list)} bars loaded "
+                     f"({bars_list[0]['t']} → {bars_list[-1]['t']})")
+            out[sym] = {
+                "c": np.array([b["c"] for b in bars_list]),
+                "h": np.array([b["h"] for b in bars_list]),
+                "l": np.array([b["l"] for b in bars_list]),
+                "v": np.array([b["v"] for b in bars_list]),
+                "t": [b["t"] for b in bars_list],
+            }
         return out
     except Exception as e:
-        log.error(f"Error fetching bars: {e}")
+        log.error(f"Error fetching bars: {e}", exc_info=True)
         return {}
 
 
@@ -620,6 +665,101 @@ def place_order(symbol: str, action: str, qty: int) -> bool:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# NOTIFICATIONS
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _build_pnl_block(positions: dict, signals: dict, mem: dict, cash: float) -> str:
+    """Returns a plain-text P&L summary for the email body."""
+    lines = []
+    total_market = 0.0
+    for sym, qty_pos in positions.items():
+        current_price = (signals.get(sym) or {}).get("price")
+        if not current_price:
+            lines.append(f"  {sym}: {qty_pos} sh  (price unavailable)")
+            continue
+        market_val = current_price * qty_pos
+        total_market += market_val
+        # Find most recent unresolved BUY for this symbol to compute unrealized P&L
+        entry_price = None
+        for t in reversed(mem.get("trades", [])):
+            if t.get("symbol") == sym and t.get("side") == "BUY" and not t.get("resolved"):
+                entry_price = t.get("entry_price")
+                break
+        if entry_price and entry_price > 0:
+            pnl      = (current_price - entry_price) * qty_pos
+            pnl_pct  = (current_price - entry_price) / entry_price * 100
+            sign     = "+" if pnl >= 0 else ""
+            lines.append(
+                f"  {sym}: {qty_pos} sh  @${current_price:.2f}"
+                f"  (entry ${entry_price:.2f})"
+                f"  P&L {sign}${pnl:.2f} ({sign}{pnl_pct:.2f}%)"
+            )
+        else:
+            lines.append(f"  {sym}: {qty_pos} sh  @${current_price:.2f}  (entry unknown)")
+    total_portfolio = cash + total_market
+    lines.append(f"\n  Cash:            ${cash:>12.2f}")
+    lines.append(f"  Market value:    ${total_market:>12.2f}")
+    lines.append(f"  Total portfolio: ${total_portfolio:>12.2f}")
+    return "\n".join(lines) if lines else "  No open positions."
+
+
+def send_trade_email(
+    symbol: str,
+    action: str,
+    qty: int,
+    price: float,
+    reason: str,
+    cash: float,
+    positions: dict,
+    signals: dict,
+    mem: dict,
+) -> None:
+    """Send a BUY/SELL notification to EMAIL_RECEIVER via Gmail SMTP."""
+    if not EMAIL_SENDER or not EMAIL_PASSWORD:
+        log.warning("EMAIL_SENDER/EMAIL_PASSWORD not set — skipping trade email.")
+        return
+
+    timestamp    = datetime.now().strftime("%Y-%m-%d %H:%M:%S UTC")
+    trade_value  = price * qty
+    pnl_block    = _build_pnl_block(positions, signals, mem, cash)
+
+    subject = f"[Trading Agent] {action} {qty}x {symbol} @ ${price:.2f}"
+    body = f"""
+Trading Agent — Order Notification
+====================================
+Timestamp  : {timestamp}
+Ticker     : {symbol}
+Action     : {action}
+Shares     : {qty}
+Price      : ${price:.2f}
+Trade value: ${trade_value:.2f}
+
+AI Motivation:
+  {reason}
+
+Portfolio P&L (post-order):
+{pnl_block}
+
+─────────────────────────────────────
+Automated notification — ETF Trading Agent (paper trading)
+""".strip()
+
+    msg = MIMEMultipart()
+    msg["From"]    = EMAIL_SENDER
+    msg["To"]      = EMAIL_RECEIVER
+    msg["Subject"] = subject
+    msg.attach(MIMEText(body, "plain"))
+
+    try:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=15) as server:
+            server.login(EMAIL_SENDER, EMAIL_PASSWORD)
+            server.sendmail(EMAIL_SENDER, EMAIL_RECEIVER, msg.as_string())
+        log.info(f"Trade email sent: {action} {qty} {symbol}")
+    except Exception as e:
+        log.error(f"Failed to send trade email: {e}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # MAIN CYCLE
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -686,6 +826,8 @@ def run_cycle():
                     "resolved":    False,
                 })
                 save_memory(mem)
+                send_trade_email(sym, action, qty, price, reason,
+                                 cash, positions, signals, mem)
 
     log.info("=== Cycle complete ===\n")
 

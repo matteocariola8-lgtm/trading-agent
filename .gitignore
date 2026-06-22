@@ -1,5 +1,7 @@
 .env
+.env.save
 trades.log
 .claude/
 credentials.json
 token.json
+memory.json
