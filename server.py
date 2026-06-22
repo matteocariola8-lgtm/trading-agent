@@ -76,6 +76,6 @@ def _scheduler_loop():
 if __name__ == "__main__":
     threading.Thread(target=_trading_loop, daemon=True).start()
     threading.Thread(target=_scheduler_loop, daemon=True).start()
-    port = int(os.getenv("PORT", 8080))
+    port = int(os.environ.get("PORT", 8080))
     agent.log.info(f"Server starting on port {port}")
     app.run(host="0.0.0.0", port=port)
