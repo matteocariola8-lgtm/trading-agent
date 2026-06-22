@@ -53,6 +53,17 @@ BARS_LIMIT        = 310          # fetch > 252 to cover 12-month momentum
 MAX_SHARES        = 5            # hard cap per trade; half-Kelly may produce fewer
 MIN_ADX_FOR_RSI   = 25           # RSI valid as directional signal only above this
 
+# Scalping mode
+SCALP_SYMBOLS          = ["SPY", "QQQ"]
+SCALP_TIMEFRAME        = "5Min"
+SCALP_BARS             = 100              # ~8 hours of 5-min data; ≥ RSI(14)+lookback
+SCALP_RSI_OVERSOLD     = 35
+SCALP_RSI_OVERBOUGHT   = 65
+SCALP_TARGET_PCT       = 0.004           # 0.4% take-profit
+SCALP_STOP_PCT         = 0.002           # 0.2% stop-loss
+SCALP_SIZE_PCT         = 0.10            # 10% of portfolio equity per trade
+SCALP_MAX_DAILY_TRADES = 3
+
 # ── Logging ───────────────────────────────────────────────────────────────────
 
 logging.basicConfig(
@@ -760,6 +771,212 @@ Automated notification — ETF Trading Agent (paper trading)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# SCALPING MODE  (intraday, 5-min bars, HIGH_VOL + no vol_confirms)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def get_intraday_bars(symbols: list[str]) -> dict[str, dict]:
+    """Returns {sym: {c, h, l, v, t}} of recent 5-min bars, oldest→newest."""
+    params = {
+        "symbols":   ",".join(symbols),
+        "timeframe": SCALP_TIMEFRAME,
+        "limit":     SCALP_BARS,
+        "feed":      "iex",
+    }
+    try:
+        r = requests.get(f"{ALPACA_DATA_URL}/stocks/bars",
+                         headers=alpaca_headers, params=params, timeout=15)
+        r.raise_for_status()
+        out = {}
+        for sym, bars_list in r.json().get("bars", {}).items():
+            if len(bars_list) < 20:
+                log.warning(f"[SCALP] {sym}: only {len(bars_list)} intraday bars — skip")
+                continue
+            out[sym] = {
+                "c": np.array([b["c"] for b in bars_list]),
+                "h": np.array([b["h"] for b in bars_list]),
+                "l": np.array([b["l"] for b in bars_list]),
+                "v": np.array([b["v"] for b in bars_list]),
+                "t": [b["t"] for b in bars_list],
+            }
+        return out
+    except Exception as e:
+        log.error(f"[SCALP] Error fetching intraday bars: {e}")
+        return {}
+
+
+def get_account_equity() -> float:
+    """Returns total portfolio equity (cash + long market value)."""
+    try:
+        r = requests.get(f"{ALPACA_BASE_URL}/account", headers=alpaca_headers, timeout=10)
+        r.raise_for_status()
+        return float(r.json().get("equity", 0))
+    except Exception as e:
+        log.error(f"[SCALP] Error fetching account equity: {e}")
+        return 0.0
+
+
+def scalp_signals(bars_5m: dict) -> dict[str, dict]:
+    """
+    RSI(14) + 5-period momentum on 5-min bars.
+    BUY  : RSI < SCALP_RSI_OVERSOLD  AND mom_5p < 0  (oversold, confirming)
+    SELL : RSI > SCALP_RSI_OVERBOUGHT AND mom_5p > 0  (overbought, confirming)
+    """
+    out = {}
+    for sym, d in bars_5m.items():
+        closes  = d["c"]
+        rsi_val = rsi(closes, period=14)
+        mom_5p  = float(closes[-1] / closes[-6] - 1) if len(closes) >= 6 else float("nan")
+        price   = float(closes[-1])
+
+        if np.isnan(rsi_val) or np.isnan(mom_5p):
+            out[sym] = {"rsi": None, "mom_5p": None, "signal": "NONE", "price": price}
+            continue
+
+        if rsi_val < SCALP_RSI_OVERSOLD and mom_5p < 0:
+            signal = "BUY"
+        elif rsi_val > SCALP_RSI_OVERBOUGHT and mom_5p > 0:
+            signal = "SELL"
+        else:
+            signal = "NONE"
+
+        out[sym] = {
+            "rsi":    round(rsi_val, 1),
+            "mom_5p": round(mom_5p, 5),
+            "signal": signal,
+            "price":  price,
+        }
+        log.info(f"[SCALP] {sym}: RSI={rsi_val:.1f} mom_5p={mom_5p:.4%} → {signal}")
+    return out
+
+
+def count_scalp_trades_today(mem: dict) -> int:
+    today = date.today().isoformat()
+    return sum(
+        1 for t in mem.get("trades", [])
+        if t.get("tag") == "SCALP" and t.get("date", "")[:10] == today
+    )
+
+
+def place_scalp_order(symbol: str, side: str, qty: int, price: float) -> bool:
+    """Bracket order with fixed TP and SL derived from SCALP_TARGET_PCT / SCALP_STOP_PCT."""
+    if qty <= 0:
+        return False
+    if side == "buy":
+        tp_price   = round(price * (1 + SCALP_TARGET_PCT), 2)
+        stop_price = round(price * (1 - SCALP_STOP_PCT), 2)
+    else:
+        tp_price   = round(price * (1 - SCALP_TARGET_PCT), 2)
+        stop_price = round(price * (1 + SCALP_STOP_PCT), 2)
+
+    body = {
+        "symbol":        symbol,
+        "qty":           str(qty),
+        "side":          side,
+        "type":          "market",
+        "time_in_force": "day",
+        "order_class":   "bracket",
+        "take_profit":   {"limit_price": str(tp_price)},
+        "stop_loss":     {"stop_price":  str(stop_price)},
+    }
+    try:
+        r = requests.post(f"{ALPACA_BASE_URL}/orders",
+                          headers=alpaca_headers, json=body, timeout=10)
+        r.raise_for_status()
+        log.info(
+            f"[SCALP] ORDER | {side.upper()} {qty} {symbol} "
+            f"entry~${price:.2f} TP=${tp_price:.2f} SL=${stop_price:.2f} "
+            f"| order_id={r.json().get('id')}"
+        )
+        return True
+    except requests.HTTPError as e:
+        log.error(f"[SCALP] Order failed {side} {qty} {symbol}: {e} | {r.text}")
+        return False
+    except Exception as e:
+        log.error(f"[SCALP] Order error {side} {qty} {symbol}: {e}")
+        return False
+
+
+def run_scalp_mode(mem: dict, cash: float, positions: dict) -> dict:
+    """
+    Intraday scalping engine.
+    Activated by run_cycle() when regime=HIGH_VOL and no ETF has vol_confirms=True.
+    Uses bracket orders; max SCALP_MAX_DAILY_TRADES per calendar day.
+    """
+    trades_today = count_scalp_trades_today(mem)
+    if trades_today >= SCALP_MAX_DAILY_TRADES:
+        log.info(f"[SCALP] Daily cap reached ({trades_today}/{SCALP_MAX_DAILY_TRADES}) — skip.")
+        return mem
+
+    log.info(f"[SCALP] Mode ACTIVE — {trades_today}/{SCALP_MAX_DAILY_TRADES} trades today")
+
+    bars_5m = get_intraday_bars(SCALP_SYMBOLS)
+    if not bars_5m:
+        log.warning("[SCALP] No intraday data — aborting.")
+        return mem
+
+    equity = get_account_equity()
+    if equity <= 0:
+        log.warning("[SCALP] Could not fetch portfolio equity — aborting.")
+        return mem
+
+    target_value = equity * SCALP_SIZE_PCT
+    sigs = scalp_signals(bars_5m)
+
+    for sym, sig in sigs.items():
+        if trades_today >= SCALP_MAX_DAILY_TRADES:
+            break
+        if sig["signal"] == "NONE":
+            continue
+
+        price = sig["price"]
+        if not price or price <= 0:
+            continue
+
+        qty = max(1, int(target_value / price))
+
+        if sig["signal"] == "BUY":
+            if positions.get(sym, 0) > 0:
+                log.info(f"[SCALP] {sym}: already holding — skip BUY")
+                continue
+            placed = place_scalp_order(sym, "buy", qty, price)
+        else:
+            held = int(positions.get(sym, 0))
+            if held <= 0:
+                log.info(f"[SCALP] {sym}: no position to sell — skip SELL")
+                continue
+            qty = min(qty, held)
+            placed = place_scalp_order(sym, "sell", qty, price)
+
+        if placed:
+            trades_today += 1
+            direction = "oversold bounce" if sig["signal"] == "BUY" else "overbought reversal"
+            reason = (
+                f"SCALP {sig['signal']}: RSI={sig['rsi']} ({direction}), "
+                f"mom_5p={sig['mom_5p']:.4%} | "
+                f"TP={SCALP_TARGET_PCT:.1%} SL={SCALP_STOP_PCT:.1%}"
+            )
+            mem["trades"].append({
+                "date":        datetime.now().isoformat(),
+                "symbol":      sym,
+                "side":        sig["signal"],
+                "qty":         qty,
+                "entry_price": price,
+                "regime":      "HIGH_VOL",
+                "tag":         "SCALP",
+                "reason":      reason,
+                "resolved":    False,
+            })
+            save_memory(mem)
+            log.info(f"[SCALP] Trade recorded: {sig['signal']} {qty} {sym} — {reason}")
+            send_trade_email(
+                sym, f"SCALP_{sig['signal']}", qty, price, reason,
+                cash, positions, {sym: {"price": price}}, mem,
+            )
+
+    return mem
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # MAIN CYCLE
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -801,6 +1018,16 @@ def run_cycle():
                 f"RSI={s.get('rsi')}({s.get('rsi_signal') or '-'}) "
                 f"suggested={sizing.get(sym)}sh"
             )
+
+    # Scalping mode: HIGH_VOL regime AND no ETF has volume-confirmed signal
+    vol_confirms_any = any(
+        signals.get(sym, {}).get("vol_confirms", False)
+        for sym in ETFS
+        if "error" not in signals.get(sym, {})
+    )
+    if regime["regime"] == "HIGH_VOL" and not vol_confirms_any:
+        log.info("[SCALP] Conditions met (HIGH_VOL + no vol_confirms) — entering scalp mode")
+        mem = run_scalp_mode(mem, cash, positions)
 
     prompt    = build_prompt(signals, regime, corr, positions, cash, news, sizing, mem)
     decisions = ask_claude(prompt)
