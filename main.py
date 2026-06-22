@@ -6,7 +6,7 @@ from datetime import datetime
 
 import pytz
 import requests
-from flask import Flask, jsonify, send_file
+from flask import Flask, jsonify, send_file, request as flask_request
 
 import agent
 import daily_report
@@ -20,6 +20,32 @@ _equity_history: deque = deque(maxlen=240)
 @app.route("/")
 def index():
     return send_file(os.path.join(os.path.dirname(__file__), "dashboard.html"))
+
+
+@app.route("/api/chart")
+def api_chart():
+    symbol = flask_request.args.get("symbol", "QQQ")
+    bars = []
+    try:
+        r = requests.get(
+            f"{agent.ALPACA_DATA_URL}/stocks/bars",
+            headers=agent.alpaca_headers,
+            params={"symbols": symbol, "timeframe": "1Min", "limit": 30, "feed": "iex"},
+            timeout=10,
+        )
+        r.raise_for_status()
+        raw = r.json().get("bars", {}).get(symbol, [])
+        bars = [{
+            "t": b["t"][11:16],
+            "o": round(b["o"], 2),
+            "h": round(b["h"], 2),
+            "l": round(b["l"], 2),
+            "c": round(b["c"], 2),
+            "v": b["v"],
+        } for b in raw]
+    except Exception:
+        pass
+    return jsonify({"symbol": symbol, "bars": bars})
 
 
 @app.route("/api/data")
@@ -44,17 +70,19 @@ def api_data():
     equity = account.get("equity")
     if equity is not None:
         _equity_history.append({
-            "t": datetime.now().strftime("%H:%M"),
+            "t": datetime.now().strftime("%H:%M:%S"),
             "v": float(equity),
         })
 
     mem = agent.load_memory()
 
     today = datetime.now().date().isoformat()
-    scalp_trades_today = sum(
-        1 for t in mem.get("trades", [])
-        if t.get("tag") == "SCALP" and t.get("date", "")[:10] == today
-    )
+    mem_trades_today = [
+        t for t in mem.get("trades", [])
+        if t.get("date", "")[:10] == today
+    ]
+    scalp_trades_today = [t for t in mem_trades_today if t.get("tag") == "SCALP"]
+    last_scalp_time = scalp_trades_today[-1].get("date") if scalp_trades_today else None
 
     return jsonify({
         "equity":             equity,
@@ -62,14 +90,20 @@ def api_data():
         "cash":               account.get("cash"),
         "positions":          positions,
         "trades":             daily_report.get_todays_trades(),
+        "mem_trades_today":   mem_trades_today,
         "market_open":        agent.is_market_open(),
         "updated_at":         datetime.now().isoformat(),
         "signals":            mem.get("last_signals", {}),
         "decisions":          mem.get("last_decisions", {}),
         "regime":             mem.get("last_regime", {}),
         "scalp_active":       mem.get("last_scalp_active", False),
-        "scalp_trades_today": scalp_trades_today,
+        "scalp_trades_today": len(scalp_trades_today),
+        "scalp_max_daily":    agent.SCALP_MAX_DAILY_TRADES,
+        "scalp_target_pct":   agent.SCALP_TARGET_PCT,
+        "scalp_stop_pct":     agent.SCALP_STOP_PCT,
+        "last_scalp_time":    last_scalp_time,
         "last_cycle_at":      mem.get("last_cycle_at"),
+        "loop_interval":      agent.LOOP_INTERVAL,
         "equity_history":     list(_equity_history),
     })
 
