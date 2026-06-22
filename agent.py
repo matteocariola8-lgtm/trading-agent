@@ -1025,7 +1025,8 @@ def run_cycle():
         1 for sym in valid_etfs
         if not signals.get(sym, {}).get("vol_confirms", False)
     )
-    if regime["regime"] == "HIGH_VOL" and no_vol_count >= 3:
+    scalp_active = regime["regime"] == "HIGH_VOL" and no_vol_count >= 3
+    if scalp_active:
         log.info(f"[SCALP] Conditions met (HIGH_VOL + {no_vol_count}/{len(valid_etfs)} ETFs without vol_confirms) — entering scalp mode")
         mem = run_scalp_mode(mem, cash, positions)
 
@@ -1055,6 +1056,14 @@ def run_cycle():
                 save_memory(mem)
                 send_trade_email(sym, action, qty, price, reason,
                                  cash, positions, signals, mem)
+
+    # Persist dashboard state
+    mem["last_signals"]      = {sym: signals.get(sym, {}) for sym in ETFS}
+    mem["last_decisions"]    = decisions
+    mem["last_regime"]       = regime
+    mem["last_scalp_active"] = scalp_active
+    mem["last_cycle_at"]     = datetime.now().isoformat()
+    save_memory(mem)
 
     log.info("=== Cycle complete ===\n")
 

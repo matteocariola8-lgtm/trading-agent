@@ -1,6 +1,7 @@
 import os
 import threading
 import time
+from collections import deque
 from datetime import datetime
 
 import pytz
@@ -11,6 +12,9 @@ import agent
 import daily_report
 
 app = Flask(__name__)
+
+# Rolling intraday equity history (up to 240 snapshots ≈ 2 hours at 30s refresh)
+_equity_history: deque = deque(maxlen=240)
 
 
 @app.route("/")
@@ -37,14 +41,36 @@ def api_data():
     except Exception:
         pass
 
+    equity = account.get("equity")
+    if equity is not None:
+        _equity_history.append({
+            "t": datetime.now().strftime("%H:%M"),
+            "v": float(equity),
+        })
+
+    mem = agent.load_memory()
+
+    today = datetime.now().date().isoformat()
+    scalp_trades_today = sum(
+        1 for t in mem.get("trades", [])
+        if t.get("tag") == "SCALP" and t.get("date", "")[:10] == today
+    )
+
     return jsonify({
-        "equity":      account.get("equity"),
-        "last_equity": account.get("last_equity"),
-        "cash":        account.get("cash"),
-        "positions":   positions,
-        "trades":      daily_report.get_todays_trades(),
-        "market_open": agent.is_market_open(),
-        "updated_at":  datetime.now().isoformat(),
+        "equity":             equity,
+        "last_equity":        account.get("last_equity"),
+        "cash":               account.get("cash"),
+        "positions":          positions,
+        "trades":             daily_report.get_todays_trades(),
+        "market_open":        agent.is_market_open(),
+        "updated_at":         datetime.now().isoformat(),
+        "signals":            mem.get("last_signals", {}),
+        "decisions":          mem.get("last_decisions", {}),
+        "regime":             mem.get("last_regime", {}),
+        "scalp_active":       mem.get("last_scalp_active", False),
+        "scalp_trades_today": scalp_trades_today,
+        "last_cycle_at":      mem.get("last_cycle_at"),
+        "equity_history":     list(_equity_history),
     })
 
 
