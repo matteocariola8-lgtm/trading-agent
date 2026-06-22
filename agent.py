@@ -1019,14 +1019,14 @@ def run_cycle():
                 f"suggested={sizing.get(sym)}sh"
             )
 
-    # Scalping mode: HIGH_VOL regime AND no ETF has volume-confirmed signal
-    vol_confirms_any = any(
-        signals.get(sym, {}).get("vol_confirms", False)
-        for sym in ETFS
-        if "error" not in signals.get(sym, {})
+    # Scalping mode: HIGH_VOL regime AND at least 3 out of 5 ETFs have vol_confirms=False
+    valid_etfs = [sym for sym in ETFS if "error" not in signals.get(sym, {})]
+    no_vol_count = sum(
+        1 for sym in valid_etfs
+        if not signals.get(sym, {}).get("vol_confirms", False)
     )
-    if regime["regime"] == "HIGH_VOL" and not vol_confirms_any:
-        log.info("[SCALP] Conditions met (HIGH_VOL + no vol_confirms) — entering scalp mode")
+    if regime["regime"] == "HIGH_VOL" and no_vol_count >= 3:
+        log.info(f"[SCALP] Conditions met (HIGH_VOL + {no_vol_count}/{len(valid_etfs)} ETFs without vol_confirms) — entering scalp mode")
         mem = run_scalp_mode(mem, cash, positions)
 
     prompt    = build_prompt(signals, regime, corr, positions, cash, news, sizing, mem)
