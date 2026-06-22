@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Trading Agent Dashboard</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f172a; color: #f1f5f9; min-height: 100vh; }
+
+    header { background: #1e293b; border-bottom: 1px solid #334155; padding: 16px 24px; display: flex; justify-content: space-between; align-items: center; }
+    header h1 { font-size: 18px; font-weight: 600; }
+    .status { display: flex; align-items: center; gap: 14px; font-size: 13px; color: #94a3b8; }
+    .badge { padding: 3px 10px; border-radius: 999px; font-size: 11px; font-weight: 700; letter-spacing: .04em; }
+    .badge.open  { background: #14532d; color: #22c55e; }
+    .badge.closed { background: #450a0a; color: #ef4444; }
+
+    main { padding: 24px; max-width: 1100px; margin: 0 auto; }
+
+    .cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 24px; }
+    .card { background: #1e293b; border-radius: 10px; padding: 20px; border: 1px solid #334155; }
+    .card .label { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: #64748b; margin-bottom: 8px; }
+    .card .value { font-size: 24px; font-weight: 700; }
+    .card .sub   { font-size: 13px; color: #64748b; margin-top: 4px; }
+
+    .green { color: #22c55e; }
+    .red   { color: #ef4444; }
+
+    .section { background: #1e293b; border-radius: 10px; border: 1px solid #334155; margin-bottom: 20px; overflow: hidden; }
+    .section h2 { font-size: 11px; font-weight: 600; padding: 14px 20px; border-bottom: 1px solid #334155; color: #64748b; text-transform: uppercase; letter-spacing: .07em; }
+
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th { padding: 10px 20px; text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: #475569; font-weight: 600; }
+    td { padding: 13px 20px; border-top: 1px solid #0f172a; }
+    tbody tr:hover td { background: rgba(255,255,255,.02); }
+
+    .empty { padding: 36px; text-align: center; color: #475569; font-size: 14px; }
+    .pill { padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; }
+    .pill.buy  { background: #14532d; color: #22c55e; }
+    .pill.sell { background: #450a0a; color: #ef4444; }
+
+    @media (max-width: 768px) { .cards { grid-template-columns: repeat(2,1fr); } }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>Trading Agent</h1>
+  <div class="status">
+    <span id="market-badge" class="badge closed">MARKET CLOSED</span>
+    <span>Updated <span id="updated-at">—</span></span>
+    <span>Refresh in <span id="countdown">60</span>s</span>
+  </div>
+</header>
+
+<main>
+  <div class="cards">
+    <div class="card">
+      <div class="label">Portfolio Value</div>
+      <div class="value" id="equity">—</div>
+    </div>
+    <div class="card">
+      <div class="label">Daily P&amp;L</div>
+      <div class="value" id="pnl">—</div>
+      <div class="sub"  id="pnl-pct">—</div>
+    </div>
+    <div class="card">
+      <div class="label">Cash Available</div>
+      <div class="value" id="cash">—</div>
+    </div>
+    <div class="card">
+      <div class="label">Open Positions</div>
+      <div class="value" id="pos-count">—</div>
+      <div class="sub"  id="unrealized-pnl">—</div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Open Positions</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Symbol</th><th>Qty</th><th>Avg Entry</th>
+          <th>Current Price</th><th>Market Value</th><th>Unrealized P&amp;L</th>
+        </tr>
+      </thead>
+      <tbody id="positions-rows"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
+    </table>
+  </div>
+
+  <div class="section">
+    <h2>Today's Trades</h2>
+    <table>
+      <thead>
+        <tr><th>Time</th><th>Side</th><th>Symbol</th><th>Qty</th><th>Order ID</th></tr>
+      </thead>
+      <tbody id="trades-rows"><tr><td colspan="5" class="empty">Loading…</td></tr></tbody>
+    </table>
+  </div>
+</main>
+
+<script>
+  const fmt     = (n, d=2) => n != null ? '$' + parseFloat(n).toLocaleString('en-US', {minimumFractionDigits:d, maximumFractionDigits:d}) : '—';
+  const fmtPct  = n => n != null ? (parseFloat(n) >= 0 ? '+' : '') + parseFloat(n).toFixed(2) + '%' : '—';
+  const cc      = n => parseFloat(n) >= 0 ? 'green' : 'red';
+
+  async function fetchData() {
+    try {
+      const d = await fetch('/api/data').then(r => r.json());
+
+      // market badge
+      const badge = document.getElementById('market-badge');
+      badge.textContent = d.market_open ? 'MARKET OPEN' : 'MARKET CLOSED';
+      badge.className   = 'badge ' + (d.market_open ? 'open' : 'closed');
+
+      // timestamp
+      if (d.updated_at) {
+        document.getElementById('updated-at').textContent =
+          new Date(d.updated_at).toLocaleTimeString();
+      }
+
+      // KPI cards
+      document.getElementById('equity').textContent = fmt(d.equity);
+      document.getElementById('cash').textContent   = fmt(d.cash);
+
+      const equity     = parseFloat(d.equity     || 0);
+      const lastEquity = parseFloat(d.last_equity || 0);
+      const pnl        = equity - lastEquity;
+      const pnlPct     = lastEquity ? pnl / lastEquity * 100 : 0;
+      const pnlEl      = document.getElementById('pnl');
+      pnlEl.textContent = (pnl >= 0 ? '+' : '') + fmt(pnl);
+      pnlEl.className   = 'value ' + cc(pnl);
+      document.getElementById('pnl-pct').textContent = fmtPct(pnlPct);
+
+      const positions = d.positions || [];
+      document.getElementById('pos-count').textContent = positions.length;
+      const totalUnr  = positions.reduce((s, p) => s + parseFloat(p.unrealized_pl || 0), 0);
+      const unrEl = document.getElementById('unrealized-pnl');
+      unrEl.textContent = 'Unrealized ' + (totalUnr >= 0 ? '+' : '') + fmt(totalUnr);
+      unrEl.className   = 'sub ' + cc(totalUnr);
+
+      // positions table
+      const posRows = document.getElementById('positions-rows');
+      posRows.innerHTML = positions.length === 0
+        ? '<tr><td colspan="6" class="empty">No open positions</td></tr>'
+        : positions.map(p => {
+            const upl    = parseFloat(p.unrealized_pl  || 0);
+            const uplpct = parseFloat(p.unrealized_plpc || 0) * 100;
+            return `<tr>
+              <td><strong>${p.symbol}</strong></td>
+              <td>${p.qty}</td>
+              <td>${fmt(p.avg_entry_price)}</td>
+              <td>${fmt(p.current_price)}</td>
+              <td>${fmt(p.market_value)}</td>
+              <td class="${cc(upl)}">${upl >= 0 ? '+' : ''}${fmt(upl)}
+                <span style="opacity:.55">(${fmtPct(uplpct)})</span></td>
+            </tr>`;
+          }).join('');
+
+      // trades table
+      const trades    = d.trades || [];
+      const tradeRows = document.getElementById('trades-rows');
+      tradeRows.innerHTML = trades.length === 0
+        ? '<tr><td colspan="5" class="empty">No trades today</td></tr>'
+        : trades.map(t => `<tr>
+            <td style="color:#94a3b8">${t.time}</td>
+            <td><span class="pill ${t.side.toLowerCase()}">${t.side}</span></td>
+            <td>${t.symbol}</td>
+            <td>${t.qty}</td>
+            <td style="color:#475569;font-size:12px">${t.order_id}</td>
+          </tr>`).join('');
+
+    } catch (e) {
+      console.error('fetch failed', e);
+    }
+  }
+
+  let secs = 60;
+  setInterval(() => {
+    document.getElementById('countdown').textContent = secs;
+    if (--secs < 0) { secs = 60; fetchData(); }
+  }, 1000);
+
+  fetchData();
+</script>
+</body>
+</html>
