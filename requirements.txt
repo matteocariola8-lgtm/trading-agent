@@ -1,6 +1,7 @@
 anthropic
 requests
 python-dotenv
+numpy
 flask
 pytz
 google-api-python-client
