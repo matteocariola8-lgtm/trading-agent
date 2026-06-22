@@ -30,7 +30,7 @@ def api_chart():
         r = requests.get(
             f"{agent.ALPACA_DATA_URL}/stocks/bars",
             headers=agent.alpaca_headers,
-            params={"symbols": symbol, "timeframe": "1Min", "limit": 30, "feed": "iex"},
+            params={"symbols": symbol, "timeframe": "1Min", "limit": 120, "feed": "iex"},
             timeout=10,
         )
         r.raise_for_status()
@@ -77,12 +77,37 @@ def api_data():
     mem = agent.load_memory()
 
     today = datetime.now().date().isoformat()
+    today_midnight = today + "T00:00:00Z"
+
     mem_trades_today = [
         t for t in mem.get("trades", [])
         if t.get("date", "")[:10] == today
     ]
     scalp_trades_today = [t for t in mem_trades_today if t.get("tag") == "SCALP"]
     last_scalp_time = scalp_trades_today[-1].get("date") if scalp_trades_today else None
+
+    # Filled orders from Alpaca today
+    orders_today = []
+    try:
+        r = requests.get(
+            f"{agent.ALPACA_BASE_URL}/orders",
+            headers=agent.alpaca_headers,
+            params={"status": "filled", "after": today_midnight, "limit": 50},
+            timeout=10,
+        )
+        r.raise_for_status()
+        raw_orders = r.json()
+        orders_today = [{
+            "id":         o.get("id"),
+            "symbol":     o.get("symbol"),
+            "side":       o.get("side"),
+            "qty":        o.get("filled_qty"),
+            "price":      o.get("filled_avg_price"),
+            "type":       o.get("order_class", "simple"),
+            "filled_at":  (o.get("filled_at") or "")[:19].replace("T", " "),
+        } for o in raw_orders if o.get("filled_at")]
+    except Exception:
+        pass
 
     return jsonify({
         "equity":             equity,
@@ -91,6 +116,7 @@ def api_data():
         "positions":          positions,
         "trades":             daily_report.get_todays_trades(),
         "mem_trades_today":   mem_trades_today,
+        "orders_today":       orders_today,
         "market_open":        agent.is_market_open(),
         "updated_at":         datetime.now().isoformat(),
         "signals":            mem.get("last_signals", {}),
