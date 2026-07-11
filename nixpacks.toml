@@ -1,2 +1,2 @@
 [start]
-cmd = "python main.py"
+cmd = "python agent.py & python main.py"
