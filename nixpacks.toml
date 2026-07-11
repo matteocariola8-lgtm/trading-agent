@@ -1,2 +1,2 @@
 [start]
-cmd = "python agent.py & python main.py"
+cmd = "sh -c \"python agent.py & python main.py\""
