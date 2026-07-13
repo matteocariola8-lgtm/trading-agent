@@ -122,6 +122,7 @@ def api_shortlist():
             "symbol": sym, "name": s.get("name", sym), "category": s.get("category"),
             "leverage": s.get("leverage", 1), "price": s.get("price"),
             "mom_rank": s.get("mom_rank"), "vol_confirms": s.get("vol_confirms"),
+            "mom_1m": s.get("mom_1m"),
             "rsi": s.get("rsi"), "action": d.get("action", "HOLD"),
             "qty": d.get("qty", 0), "reason": d.get("reason", ""),
         })
