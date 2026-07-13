@@ -122,6 +122,81 @@ UNIVERSE = {
     "SDS":  {"category": "leveraged_bear", "leverage": -2, "name": "S&P 500 2x Short"},
     "QID":  {"category": "leveraged_bear", "leverage": -2, "name": "Nasdaq 100 2x Short"},
     "DXD":  {"category": "leveraged_bear", "leverage": -2, "name": "Dow Jones 2x Short"},
+
+    # ── Azioni singole USA — Tecnologia ───────────────────────────────────
+    "AAPL": {"category": "stock_tech", "leverage": 1, "name": "Apple"},
+    "MSFT": {"category": "stock_tech", "leverage": 1, "name": "Microsoft"},
+    "GOOGL":{"category": "stock_tech", "leverage": 1, "name": "Alphabet (Google)"},
+    "AMZN": {"category": "stock_tech", "leverage": 1, "name": "Amazon"},
+    "META": {"category": "stock_tech", "leverage": 1, "name": "Meta Platforms"},
+    "NVDA": {"category": "stock_tech", "leverage": 1, "name": "Nvidia"},
+    "TSLA": {"category": "stock_tech", "leverage": 1, "name": "Tesla"},
+    "NFLX": {"category": "stock_tech", "leverage": 1, "name": "Netflix"},
+    "ADBE": {"category": "stock_tech", "leverage": 1, "name": "Adobe"},
+    "CRM":  {"category": "stock_tech", "leverage": 1, "name": "Salesforce"},
+    "AVGO": {"category": "stock_tech", "leverage": 1, "name": "Broadcom"},
+    "AMD":  {"category": "stock_tech", "leverage": 1, "name": "AMD"},
+    "INTC": {"category": "stock_tech", "leverage": 1, "name": "Intel"},
+    "QCOM": {"category": "stock_tech", "leverage": 1, "name": "Qualcomm"},
+    "MU":   {"category": "stock_tech", "leverage": 1, "name": "Micron Technology"},
+
+    # ── Azioni singole USA — Finanza ───────────────────────────────────────
+    "JPM":  {"category": "stock_finance", "leverage": 1, "name": "JPMorgan Chase"},
+    "BAC":  {"category": "stock_finance", "leverage": 1, "name": "Bank of America"},
+    "GS":   {"category": "stock_finance", "leverage": 1, "name": "Goldman Sachs"},
+    "MS":   {"category": "stock_finance", "leverage": 1, "name": "Morgan Stanley"},
+    "WFC":  {"category": "stock_finance", "leverage": 1, "name": "Wells Fargo"},
+    "V":    {"category": "stock_finance", "leverage": 1, "name": "Visa"},
+    "MA":   {"category": "stock_finance", "leverage": 1, "name": "Mastercard"},
+    "AXP":  {"category": "stock_finance", "leverage": 1, "name": "American Express"},
+
+    # ── Azioni singole USA — Salute ──────────────────────────────────────
+    "JNJ":  {"category": "stock_health", "leverage": 1, "name": "Johnson & Johnson"},
+    "UNH":  {"category": "stock_health", "leverage": 1, "name": "UnitedHealth"},
+    "PFE":  {"category": "stock_health", "leverage": 1, "name": "Pfizer"},
+    "ABBV": {"category": "stock_health", "leverage": 1, "name": "AbbVie"},
+    "MRK":  {"category": "stock_health", "leverage": 1, "name": "Merck"},
+    "LLY":  {"category": "stock_health", "leverage": 1, "name": "Eli Lilly"},
+    "TMO":  {"category": "stock_health", "leverage": 1, "name": "Thermo Fisher Scientific"},
+
+    # ── Azioni singole USA — Consumo ─────────────────────────────────────
+    "WMT":  {"category": "stock_consumer", "leverage": 1, "name": "Walmart"},
+    "PG":   {"category": "stock_consumer", "leverage": 1, "name": "Procter & Gamble"},
+    "KO":   {"category": "stock_consumer", "leverage": 1, "name": "Coca-Cola"},
+    "PEP":  {"category": "stock_consumer", "leverage": 1, "name": "PepsiCo"},
+    "MCD":  {"category": "stock_consumer", "leverage": 1, "name": "McDonald's"},
+    "NKE":  {"category": "stock_consumer", "leverage": 1, "name": "Nike"},
+    "HD":   {"category": "stock_consumer", "leverage": 1, "name": "Home Depot"},
+    "COST": {"category": "stock_consumer", "leverage": 1, "name": "Costco"},
+
+    # ── Azioni singole USA — Industriale ed Energia ────────────────────────
+    "BA":   {"category": "stock_industrial", "leverage": 1, "name": "Boeing"},
+    "CAT":  {"category": "stock_industrial", "leverage": 1, "name": "Caterpillar"},
+    "GE":   {"category": "stock_industrial", "leverage": 1, "name": "General Electric"},
+    "HON":  {"category": "stock_industrial", "leverage": 1, "name": "Honeywell"},
+    "LMT":  {"category": "stock_industrial", "leverage": 1, "name": "Lockheed Martin"},
+    "XOM":  {"category": "stock_energy", "leverage": 1, "name": "ExxonMobil"},
+    "CVX":  {"category": "stock_energy", "leverage": 1, "name": "Chevron"},
+    "COP":  {"category": "stock_energy", "leverage": 1, "name": "ConocoPhillips"},
+
+    # ── ADR — esposizione indiretta a EUROPA (titoli quotati USA) ──────────
+    "ASML": {"category": "adr_europe", "leverage": 1, "name": "ASML (Olanda, semiconduttori)"},
+    "SAP":  {"category": "adr_europe", "leverage": 1, "name": "SAP (Germania, software)"},
+    "NVO":  {"category": "adr_europe", "leverage": 1, "name": "Novo Nordisk (Danimarca, farma)"},
+    "UL":   {"category": "adr_europe", "leverage": 1, "name": "Unilever (Regno Unito, largo consumo)"},
+    "SHEL": {"category": "adr_europe", "leverage": 1, "name": "Shell (Regno Unito, energia)"},
+    "TTE":  {"category": "adr_europe", "leverage": 1, "name": "TotalEnergies (Francia, energia)"},
+    "SNY":  {"category": "adr_europe", "leverage": 1, "name": "Sanofi (Francia, farma)"},
+    "AZN":  {"category": "adr_europe", "leverage": 1, "name": "AstraZeneca (Regno Unito, farma)"},
+
+    # ── ADR — esposizione indiretta ad ASIA (titoli quotati USA) ────────────
+    "TSM":  {"category": "adr_asia", "leverage": 1, "name": "Taiwan Semiconductor (Taiwan)"},
+    "BABA": {"category": "adr_asia", "leverage": 1, "name": "Alibaba (Cina)"},
+    "JD":   {"category": "adr_asia", "leverage": 1, "name": "JD.com (Cina)"},
+    "SONY": {"category": "adr_asia", "leverage": 1, "name": "Sony (Giappone)"},
+    "TM":   {"category": "adr_asia", "leverage": 1, "name": "Toyota (Giappone)"},
+    "SE":   {"category": "adr_asia", "leverage": 1, "name": "Sea Limited (Singapore)"},
+    "INFY": {"category": "adr_asia", "leverage": 1, "name": "Infosys (India)"},
 }
 
 ALL_SYMBOLS = sorted(UNIVERSE.keys())
